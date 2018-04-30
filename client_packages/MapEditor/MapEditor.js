@@ -7,6 +7,8 @@
 //Add 2D graphic to rotation axis so they can be seen through the map/objects like the movement axis
 //Add an object hash fetcher (Must work on any object, not just ragemp objects)
 
+const Natives = require('./MapEditor/Natives.js')
+
 //Bugged out as of 0.3.5
 mp.events.add("entityStreamIn", (entity) => 
 {
@@ -16,6 +18,12 @@ mp.events.add("entityStreamIn", (entity) =>
         if(collision != null)
         {
             entity.setCollision(collision, false);
+        }
+
+        let freeze = entity.getVariable("cmap_freeze");
+        if(freeze != null)
+        {
+            entity.freezePosition(freeze);
         }
     }
 });
@@ -51,6 +59,9 @@ mp.events.add("MapEditor_EditMap", (data) =>
         obj.setCollision(true, false);
         obj.setRotation(objs[i].rx, objs[i].ry, objs[i].rz, 2, true);
         obj.cmapcoll = objs[i].col;
+        obj.cmapfreeze = objs[i].freeze;
+        if(obj.cmapfreeze == null)
+            obj.cmapfreeze = true;
         editorObjects.push(obj);
     }
 });
@@ -63,6 +74,17 @@ mp.events.add("MapEditor_SetColl", (entityID, coll) =>
     {
         entity.setCollision(!!coll, false);
         entity.cmapcoll = !!coll;
+        entity.setLodDist(LODDist);
+    }
+});
+
+mp.events.add("MapEditor_SetFreeze", (entityID, frz) =>
+{
+    let entity = mp.objects.at(entityID);
+    if(entity != null)
+    {
+        entity.freezePosition(!!frz);
+        entity.cmapfreeze = !!frz;
         entity.setLodDist(LODDist);
     }
 });
@@ -103,7 +125,8 @@ const bindKeys = {
     KEY_DELETE: 0x2E,
     KEY_C: 0x43,
     KEY_UNDO: 0x5A,
-    KEY_REDO: 0x59
+    KEY_REDO: 0x59,
+    KEY_F: 0x46,
 };
 
 let controlModifier = false;
@@ -141,6 +164,7 @@ let LODDist = 65535; //65535 = max
 let ToggleArrowKeyMovement = true;
 let AxisMem = 0;
 let editorFocusObjectCollision = true;
+let editorFocusObjectFreeze = true;
 let editorDragMode = false;
 
 let sc = mp.game.graphics.requestScaleformMovie("instructional_buttons");
@@ -376,9 +400,9 @@ function CreateMovMarkerObjs()
 	editorYMovMarkerObj.setCollision(false, false);
 	editorZMovMarkerObj.freezePosition(true);
     editorZMovMarkerObj.setCollision(false, false);
-    mp.game.invoke('0x93271EC996EE94D2', editorXMovMarkerObj.handle, 0, false);
-	mp.game.invoke('0x93271EC996EE94D2', editorYMovMarkerObj.handle, 0, false);
-    mp.game.invoke('0x93271EC996EE94D2', editorZMovMarkerObj.handle, 0, false);
+    mp.game.invoke(Natives.SET_ENTITY_ALPHA, editorXMovMarkerObj.handle, 0, false);
+	mp.game.invoke(Natives.SET_ENTITY_ALPHA, editorYMovMarkerObj.handle, 0, false);
+    mp.game.invoke(Natives.SET_ENTITY_ALPHA, editorZMovMarkerObj.handle, 0, false);
     
     editorXMovColor = [255, 0, 0, 255];
     editorYMovColor = [0, 255, 0, 255];
@@ -463,9 +487,9 @@ function CreateAxisMarkerObjs()
     editorXAxisMarkerObj.setRotation(0, 0, 0, 2, true);
 	editorYAxisMarkerObj.setRotation(90, 0, 0, 2, true);
 	editorZAxisMarkerObj.setRotation(0, 90, 0, 2, true);
-    mp.game.invoke('0x93271EC996EE94D2', editorXAxisMarkerObj.handle, 0, false);
-	mp.game.invoke('0x93271EC996EE94D2', editorYAxisMarkerObj.handle, 0, false);
-    mp.game.invoke('0x93271EC996EE94D2', editorZAxisMarkerObj.handle, 0, false);
+    mp.game.invoke(Natives.SET_ENTITY_ALPHA, editorXAxisMarkerObj.handle, 0, false);
+	mp.game.invoke(Natives.SET_ENTITY_ALPHA, editorYAxisMarkerObj.handle, 0, false);
+    mp.game.invoke(Natives.SET_ENTITY_ALPHA, editorZAxisMarkerObj.handle, 0, false);
     
     editorXAxisColor = [255, 0, 0, 255];
     editorYAxisColor = [0, 255, 0, 255];
@@ -529,10 +553,11 @@ function CreateFocusObject(hash = null)
         
         editorFocusObject = mp.objects.new(mp.game.joaat(objData[IndexMem]), mp.players.local.position, new mp.Vector3(), 255, 0);
         editorFocusObject.cmapcoll = true;
+        editorFocusObject.cmapfreeze = true;
         editorFocusObject.setLodDist(LODDist);
         editorFocusObject.freezePosition(true);
         editorFocusObject.setCollision(false, false);
-        mp.game.invoke('0x93271EC996EE94D2', editorFocusObject.handle, editorTransparencySelect, false);
+        mp.game.invoke(Natives.SET_ENTITY_ALPHA, editorFocusObject.handle, editorTransparencySelect, false);
     }
     else
     {
@@ -546,10 +571,11 @@ function CreateFocusObject(hash = null)
             }
             editorFocusObject = mp.objects.new(hash, mp.players.local.position, new mp.Vector3(), 255, 0);
             editorFocusObject.cmapcoll = true;
+            editorFocusObject.cmapfreeze = true;
             editorFocusObject.setLodDist(LODDist);
             editorFocusObject.freezePosition(true);
             editorFocusObject.setCollision(false, false);
-            mp.game.invoke('0x93271EC996EE94D2', editorFocusObject.handle, editorTransparencySelect, false);
+            mp.game.invoke(Natives.SET_ENTITY_ALPHA, editorFocusObject.handle, editorTransparencySelect, false);
         }
         else
         {
@@ -616,7 +642,8 @@ function StartMapEditor()
                 let pos = editorObjects[i].getCoords(true);
                 let rot = editorObjects[i].getRotation(2);
                 let coll = editorObjects[i].cmapcoll;
-                mapData.push({model : editorObjects[i].getModel(), x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, col: !!coll});
+                let frz = editorObjects[i].cmapfreeze;
+                mapData.push({model : editorObjects[i].getModel(), x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, col: !!coll, freeze: !!frz});
             }
         }
         mp.events.callRemote("MapEditor_Save", "autosave", JSON.stringify(mapData, null, " ") + "");
@@ -729,10 +756,11 @@ mp.events.add("playerCommand", (command) =>
                     let pos = editorObjects[i].getCoords(true);
                     let rot = editorObjects[i].getRotation(2);
                     let coll = editorObjects[i].cmapcoll;
-                    mapData.push({model : editorObjects[i].getModel(), x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, col: !!coll});
+                    let frz = editorObjects[i].cmapfreeze;
+                    mapData.push({model : editorObjects[i].getModel(), x: pos.x, y: pos.y, z: pos.z, rx: rot.x, ry: rot.y, rz: rot.z, col: !!coll, freeze: !!frz});
                 }
             }
-
+            mp.gui.chat.push("save LEN: " + editorObjects.length);
             mp.events.callRemote("MapEditor_Save", args[0], JSON.stringify(mapData, null, " ") + "");
             mp.gui.chat.push("Map saved!");
         }
@@ -864,9 +892,9 @@ mp.events.add("playerCommand", (command) =>
                     if(memObj != null)
                     {
                         if(memObj.handle != null)
-                            mp.game.invoke('0x2087B43C7787E236', memObj.handle);
+                            mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj.handle);
                         else
-                            mp.game.invoke('0x2087B43C7787E236', memObj);
+                            mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj);
                         memObj = null;
                     }
                     editorState = 1;
@@ -889,9 +917,9 @@ mp.events.add("playerCommand", (command) =>
                     if(memObj != null)
                     {
                         if(memObj.handle != null)
-                            mp.game.invoke('0x2087B43C7787E236', memObj.handle);
+                            mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj.handle);
                         else
-                            mp.game.invoke('0x2087B43C7787E236', memObj);
+                            mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj);
                         memObj = null;
                     }
                     editorState = 1;
@@ -926,7 +954,7 @@ mp.keys.bind(bindKeys.KEY_1, false, function()
         }
         else
         {
-            mp.game.invoke('0x2087B43C7787E236', editorFocusObject.handle);
+            mp.game.invoke(Natives.RESET_ENTITY_ALPHA, editorFocusObject.handle);
             editorFocusObject.freezePosition(true);
             editorFocusObject.setCollision(true, false);
             editorFocusObject = null;
@@ -944,9 +972,9 @@ mp.keys.bind(bindKeys.KEY_2, false, function()
     if(memObj != null)
     {
         if(memObj.handle != null)
-            mp.game.invoke('0x2087B43C7787E236', memObj.handle);
+            mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj.handle);
         else
-            mp.game.invoke('0x2087B43C7787E236', memObj);
+            mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj);
         memObj = null;
     }
 
@@ -972,9 +1000,9 @@ mp.keys.bind(bindKeys.KEY_3, false, function()
     if(memObj != null)
     {
         if(memObj.handle != null)
-            mp.game.invoke('0x2087B43C7787E236', memObj.handle);
+            mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj.handle);
         else
-            mp.game.invoke('0x2087B43C7787E236', memObj);
+            mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj);
         memObj = null;
     }
 
@@ -1003,28 +1031,51 @@ mp.keys.bind(bindKeys.KEY_ENTER, false, function()
     if(editorState === 0)
         return;
 
-    if(editorFocusObject === null)
+    if(editorFocusObject == null)
         return;
 
-    mp.game.invoke('0x2087B43C7787E236', editorFocusObject.handle);
-    editorFocusObject.setCollision(true, false);
-    editorFocusObject.cmapcoll = editorFocusObjectCollision;
-    let pos = editorFocusObject.getCoords(true);
-    let rot = editorFocusObject.getRotation(2);
-    editorObjects.push(editorFocusObject);
-    editorFocusObjectCollision = true;
-
-    while(!mp.game.streaming.isModelInCdimage(mp.game.joaat(objData[IndexMem])) || !mp.game.streaming.isModelValid(mp.game.joaat(objData[IndexMem])))
-	{
-		IndexMem++;
-		if(IndexMem >= objData.length)
-			IndexMem = 0;
+    if(IsObjectSpawned(editorFocusObject))
+    {
+        mp.game.invoke(Natives.RESET_ENTITY_ALPHA, editorFocusObject.handle);
+        editorFocusObject.setCollision(true, false);
+        editorFocusObject.cmapcoll = editorFocusObjectCollision;
+        editorFocusObject.cmapfreeze = editorFocusObjectFreeze;
+        editorFocusObjectCollision = true;
+        editorFocusObjectFreeze = true;
+        while(!mp.game.streaming.isModelInCdimage(mp.game.joaat(objData[IndexMem])) || !mp.game.streaming.isModelValid(mp.game.joaat(objData[IndexMem])))
+        {
+            IndexMem++;
+            if(IndexMem >= objData.length)
+                IndexMem = 0;
+        }
+        
+        editorFocusObject = null;
+        //CreateFocusObject();
+        AxisMem = 0;
+        editorState = 2;
     }
-    
-    editorFocusObject = null;
-    //CreateFocusObject();
-    AxisMem = 0;
-    editorState = 2;
+    else
+    {
+        mp.game.invoke(Natives.RESET_ENTITY_ALPHA, editorFocusObject.handle);
+        editorFocusObject.setCollision(true, false);
+        editorFocusObject.cmapcoll = editorFocusObjectCollision;
+        editorFocusObject.cmapfreeze = editorFocusObjectFreeze;
+        editorObjects.push(editorFocusObject);
+        editorFocusObjectCollision = true;
+        editorFocusObjectFreeze = true;
+
+        while(!mp.game.streaming.isModelInCdimage(mp.game.joaat(objData[IndexMem])) || !mp.game.streaming.isModelValid(mp.game.joaat(objData[IndexMem])))
+        {
+            IndexMem++;
+            if(IndexMem >= objData.length)
+                IndexMem = 0;
+        }
+        
+        editorFocusObject = null;
+        //CreateFocusObject();
+        AxisMem = 0;
+        editorState = 2;
+    }
 });
 
 //----------chat----
@@ -1097,6 +1148,19 @@ mp.keys.bind(bindKeys.KEY_C, false, function()
     if(ObjectNotNull(editorFocusObject))
     {
         editorFocusObject.cmapcoll = !!editorFocusObjectCollision;
+    }
+});
+
+mp.keys.bind(bindKeys.KEY_F, false, function()
+{
+    if(!editorStart)
+        return;
+    if(chat)
+        return;
+    editorFocusObjectFreeze = !editorFocusObjectFreeze;
+    if(ObjectNotNull(editorFocusObject))
+    {
+        editorFocusObject.cmapfreeze = !!editorFocusObjectFreeze;
     }
 });
 
@@ -1246,16 +1310,16 @@ mp.events.add("render", () =>
     {
         mp.game.ui.setTextFont(7);
         mp.game.ui.setTextEntry2("STRING");
-        //mp.game.invoke('0x4F69FBD64CDF125B', entity),
+        //mp.game.invoke(Natives.GET_ENTITY_MODEL, entity),
         if(memObj != null)
         {
             if(memObj.model != null)
-                {
-                    mp.game.ui.addTextComponentSubstringPlayerName("[Editor Object]: " + memObj.model);
-                }
+            {
+                mp.game.ui.addTextComponentSubstringPlayerName("[Editor Object]: " + memObj.model);
+            }
             else
             {
-                mp.game.ui.addTextComponentSubstringPlayerName("[Invalid Object]: " + mp.game.invoke('0x4F69FBD64CDF125B', memObj));
+                mp.game.ui.addTextComponentSubstringPlayerName("[Invalid Object]: " + mp.game.invoke(Natives.GET_ENTITY_MODEL, memObj));
             }
         }
         else
@@ -1277,9 +1341,9 @@ mp.events.add("render", () =>
 			if(memObj != null)
 			{
                 if(memObj.handle != null)
-                    mp.game.invoke('0x2087B43C7787E236', memObj.handle);
+                    mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj.handle);
                 else
-                    mp.game.invoke('0x2087B43C7787E236', memObj);
+                    mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj);
 				editorFocusObject = null;
 				memObj = null;
 			}
@@ -1289,15 +1353,15 @@ mp.events.add("render", () =>
             if(memObj != null)
             {
                 if(memObj.handle != null)
-                    mp.game.invoke('0x2087B43C7787E236', memObj.handle);
+                    mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj.handle);
                 else
-                    mp.game.invoke('0x2087B43C7787E236', memObj);
+                    mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj);
             }
             
             if(newObj.entity.handle != null)
-                mp.game.invoke('0x93271EC996EE94D2', newObj.entity.handle, editorTransparencySelect, false);
+                mp.game.invoke(Natives.SET_ENTITY_ALPHA, newObj.entity.handle, editorTransparencySelect, false);
             else
-                mp.game.invoke('0x93271EC996EE94D2', newObj.entity, editorTransparencySelect, false);
+                mp.game.invoke(Natives.SET_ENTITY_ALPHA, newObj.entity, editorTransparencySelect, false);
             
             memObj = newObj.entity;
             
@@ -1320,7 +1384,7 @@ mp.events.add("render", () =>
                 }
                 else if(mp.game.controls.isDisabledControlJustReleased(0, 25))
                 {
-                    mp.game.invoke('0x2087B43C7787E236', memObj.handle);
+                    mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj.handle);
                     CreateFocusObject(memObj.model);
                     AxisMem = 0;
                     memObj = null;
@@ -1335,8 +1399,8 @@ mp.events.add("render", () =>
             {
                 if(mp.game.controls.isDisabledControlJustReleased(0, 25))
                 {
-                    mp.game.invoke('0x2087B43C7787E236', memObj);
-                    CreateFocusObject(mp.game.invoke('0x4F69FBD64CDF125B', memObj));
+                    mp.game.invoke(Natives.RESET_ENTITY_ALPHA, memObj);
+                    CreateFocusObject(mp.game.invoke(Natives.GET_ENTITY_MODEL, memObj));
                     AxisMem = 0;
                     memObj = null;
 
@@ -1361,6 +1425,7 @@ mp.events.add("render", () =>
             mp.game.ui.addTextComponentSubstringPlayerName("Index: " + IndexMem + " -> " + objData[IndexMem]);
             mp.game.ui.drawSubtitleTimed(1, true);
             let colvar = editorFocusObject.cmapcoll;
+            let frzvar = editorFocusObject.cmapfreeze;
             AddInstructionalStart();
             AddInstructionalButtonCustom("Exit Editor", "t_F2");
             AddInstructionalButtonCustom("Selector Mode", "t_1");
@@ -1376,6 +1441,17 @@ mp.events.add("render", () =>
             else
             {
                 AddInstructionalButtonCustom("Collision: ON", "t_C");
+            }
+            if(frzvar != null)
+            {
+                if(frzvar)
+                    AddInstructionalButtonCustom("Frozen: ON", "t_F");
+                else
+                    AddInstructionalButtonCustom("Frozen: OFF", "t_F");
+            }
+            else
+            {
+                AddInstructionalButtonCustom("Frozen: ON", "t_F");
             }
             AddInstructionalButton("Auto Adjust", 101);
             AddInstructionalButton("Place Object", 100);
@@ -1393,13 +1469,15 @@ mp.events.add("render", () =>
 
                 if(mp.game.controls.isDisabledControlJustReleased(0, 24))
                 {
-                    mp.game.invoke('0x2087B43C7787E236', editorFocusObject.handle);
+                    mp.game.invoke(Natives.RESET_ENTITY_ALPHA, editorFocusObject.handle);
                     editorFocusObject.setCollision(true, false);
                     editorFocusObject.cmapcoll = editorFocusObjectCollision;
+                    editorFocusObject.cmapfreeze = editorFocusObjectFreeze;
                     let pos = editorFocusObject.getCoords(true);
                     let rot = editorFocusObject.getRotation(2);
                     editorObjects.push(editorFocusObject);
                     editorFocusObjectCollision = true;
+                    editorFocusObjectFreeze = true;
                     editorFocusObject = null;
                     CreateFocusObject();
                     AxisMem = 0;
@@ -1469,6 +1547,7 @@ mp.events.add("render", () =>
         else
         {
             let colvar = editorFocusObject.cmapcoll;
+            let frzvar = editorFocusObject.cmapfreeze;
             AddInstructionalStart();
             AddInstructionalButtonCustom("Exit Editor", "t_F2");
             AddInstructionalButtonCustom("Placement Mode", "t_2");
@@ -1483,6 +1562,17 @@ mp.events.add("render", () =>
             else
             {
                 AddInstructionalButtonCustom("Collision: ON", "t_C");
+            }
+            if(frzvar != null)
+            {
+                if(frzvar)
+                    AddInstructionalButtonCustom("Frozen: ON", "t_F");
+                else
+                    AddInstructionalButtonCustom("Frozen: OFF", "t_F");
+            }
+            else
+            {
+                AddInstructionalButtonCustom("Frozen: ON", "t_F");
             }
             if(ToggleArrowKeyMovement)
             {
@@ -1895,7 +1985,7 @@ mp.events.add("render", () =>
                             }
                             else
                             {
-                                mp.game.invoke('0x2087B43C7787E236', editorFocusObject.handle);
+                                mp.game.invoke(Natives.RESET_ENTITY_ALPHA, editorFocusObject.handle);
                                 editorFocusObject.freezePosition(true);
                                 editorFocusObject.setCollision(true, false);
                                 editorFocusObject = null;
